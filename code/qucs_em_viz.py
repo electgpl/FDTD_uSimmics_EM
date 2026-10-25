@@ -129,6 +129,10 @@ def parse_pcb(path):
     sub = props.get("Substrate", "").split("|")
     substrate = {"er": float(sub[1]), "h": to_si(sub[2]), "tand": float(sub[3] or 0),
                  "t": to_si(sub[5])} if len(sub) > 5 else None
+    if substrate is not None and len(sub) > 7:
+        # field 7 = substrate backside: "1" = metal (full ground under the whole layout, as in the
+        # schematic SUBST "Metal" option), "0" = no backside metal. Inferred from real files.
+        substrate["backside_metal"] = sub[7].strip() == "1"
     fr = props.get("Frequency", "").split("|")
     sweep = (to_si(fr[0]), to_si(fr[1]), int(fr[2])) if len(fr) == 3 else None
     rad = props.get("Radiation", "").split("|")
@@ -312,8 +316,11 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
         cu.AddBox([r[0], r[1], 0], [r[2], r[3], 0], priority=10)
 
     gm = OE_GROUND
-    if gm == "auto":
-        gm = "full" if any(re.match(PATCH_REGEX, r[0]) for r in R) else "none"
+    if gm == "auto":                 # follow the uSimmics substrate definition when available
+        if "backside_metal" in sub:
+            gm = "full" if sub["backside_metal"] else "none"
+        else:
+            gm = "full" if any(re.match(PATCH_REGEX, r[0]) for r in R) else "none"
     gnd = []
     if gm == "full":
         gnd = [(bx0, by0, bx1, by1)]
@@ -494,7 +501,18 @@ shorts = [l for l in lumped if l["port"] == 0]
 print(f"Layout: {len(rects)} rectangles | ports: {[p['name'] for p in ports]} | "
       f"lumped: {[s['name'] for s in shorts]}")
 if sub:
-    print(f"Substrate: er={sub['er']}, h={sub['h']*1e3:.3f} mm, t={sub['t']*1e6:.0f} um")
+    print(f"Substrate: er={sub['er']}, h={sub['h']*1e3:.3f} mm, t={sub['t']*1e6:.0f} um, backside = "
+          + ("metal (full ground)" if sub.get("backside_metal") else "no metal" if "backside_metal" in sub else "?"))
+    has_patches = any(re.match(PATCH_REGEX, r[0]) for r in rects)
+    if sub.get("backside_metal") and not has_patches:
+        print("WARNING: the substrate has a METAL BACKSIDE under the whole layout. Printed antennas such as\n"
+              "  IFA/MIFA/dipoles cannot radiate over a full ground plane (it becomes a shorted microstrip\n"
+              "  structure: Re(Zin) of a few ohms or less, inductive Zin). Set the substrate backside to no\n"
+              "  metal in uSimmics and draw the real board ground as copper.")
+if os.path.exists(base + ".sch"):
+    print(f"WARNING: '{PROJECT}.sch' exists next to the layout. With DataSet=*.dat the schematic and the\n"
+          f"  layout write to the SAME '{PROJECT}.dat' and overwrite each other's results. Give the layout\n"
+          f"  its own name (e.g. {PROJECT}_EM.pcb).")
 print("Variables in the .dat:", {k: (v["deps"], v["dims"], v["v"].shape) for k, v in dat.items()})
 
 xs = np.array([[r[1], r[3]] for r in rects]).ravel()
@@ -577,6 +595,9 @@ if OE is not None and OE["ports"]:
 for lbl, ff_, ss_, _c in curves:
     db = 20 * np.log10(np.abs(ss_) + 1e-15); i = int(np.argmin(db))
     zin = 50 * (1 + ss_[i]) / (1 - ss_[i])
+    if zin.real < 2.0 and db[i] > -3:
+        print(f"WARNING [{lbl}]: Re(Zin) = {zin.real:.2f} Ω at the S11 minimum: almost no radiation "
+              f"resistance (no resonance in the sweep, or the structure is not radiating).")
     txt = f"[{lbl}] S11 min = {db[i]:.2f} dB @ {ff_[i]/1e9:.4f} GHz (Zin = {zin.real:.1f}{zin.imag:+.1f}j Ω)"
     below = db <= -10
     if below[i]:
