@@ -31,8 +31,12 @@ Everything is set in the CONFIG block (meant for Thonny, no command-line argumen
 """
 
 # ============================ CONFIG ======================================
-QUCS_DIR        = "examples"                 # project folder (absolute or relative to the working dir)
-PROJECT         = "Radar24G_Array1x4_Layout" # base name (.pcb / .dat)
+# Windows paths: use a raw string r"..." (or forward slashes). A plain "C:\Users\..." is a
+# SyntaxError, because "\U" starts a Unicode escape sequence.
+#   QUCS_DIR = r"C:\Users\me\Desktop\my_antenna"
+#   QUCS_DIR = "C:/Users/me/Desktop/my_antenna"
+QUCS_DIR        = r"C:\Users\Sebastian\Desktop\WiFiYAGI\uSimmcs" # project folder (absolute or relative to the working dir)
+PROJECT         = "WiFiYAGI_EM" # base name (.pcb / .dat)
 PATTERN_SOURCE  = "auto"        # "auto" | "dat" | "openems" | "patch" | "none"
 F_PATTERN_HZ    = None          # None: .pcb Radiation frequency if inside the sweep; otherwise S11 minimum
 CUT_PHI_DEG     = None          # field-map plane; None = auto (narrowest-beam plane)
@@ -335,7 +339,7 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
     def inside(b, x, y):
         return b[0] - 1e-6 <= x <= b[2] + 1e-6 and b[1] - 1e-6 <= y <= b[3] + 1e-6
 
-    lx, ly, ports = [], [], []
+    lx, ly, ports, port_spans = [], [], [], []
     for L in lumped:
         x, y, w = L["x"] / U, L["y"] / U, max(L["w"] / U, 0.1)
         over = any(inside(b, x, y) for b in gnd)
@@ -376,6 +380,7 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
             d = best[1]
             log(f"openEMS: port {L['name']} in-plane, gap {best[0]:.3f} mm along {d}")
         lx += [start[0], stop[0]]; ly += [start[1], stop[1]]
+        port_spans.append((start, stop, d))
         ports.append((L["name"], FDTD.AddLumpedPort(L["port"], L["z"] or 50, start, stop, d,
                                                      excite=1.0, priority=5)))
 
@@ -389,18 +394,29 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
         res = min(pw) / 2
     air = OE_AIR_LAM * C0 / f_lo / U
     air_up = max(air, OE_AIR_UP_LAM * C0 / f_lo / U)
-    def merge(v, tol):
+    def merge(v, tol, protect=()):
         """Merges nearly coincident lines (edges differing by microns create tiny
-        cells and an absurd timestep)."""
-        v = np.sort(np.asarray(v, float)); out = [v[0]]
-        for a in v[1:]:
-            if a - out[-1] > tol:
-                out.append(a)
-        return out
+        cells and an absurd timestep). Lines in 'protect' (port edges) are NEVER merged
+        away: if a port gap is smaller than tol, collapsing its two edges into one line
+        gives a zero-length port (openEMS: 'only a 1D/line integration is allowed',
+        zero excitation energy, and the run never meets the end criterion)."""
+        prot = np.unique(np.asarray(list(protect), float))
+        v = np.sort(np.concatenate([np.asarray(list(v), float), prot]))
+        out = []                                           # (value, is_protected)
+        for a in v:
+            is_p = prot.size > 0 and np.min(np.abs(prot - a)) < 1e-9
+            if out and a - out[-1][0] <= tol:
+                if is_p and not out[-1][1]:
+                    out[-1] = (a, True)                    # a port edge replaces an ordinary line
+                elif is_p and a - out[-1][0] > 1e-9:
+                    out.append((a, True))                  # two distinct port edges: keep both
+                continue
+            out.append((a, bool(is_p)))
+        return [a for a, _ in out]
 
     tol = 0.25 * res
-    mesh.AddLine("x", merge(list(exs) + lx + [bx0, bx1, bx0 - air, bx1 + air], tol))
-    mesh.AddLine("y", merge(list(eys) + ly + [by0, by1, by0 - air, by1 + air], tol))
+    mesh.AddLine("x", merge(list(exs) + [bx0, bx1, bx0 - air, bx1 + air], tol, lx))
+    mesh.AddLine("y", merge(list(eys) + [by0, by1, by0 - air, by1 + air], tol, ly))
     nz = max(3, int(np.ceil(h / res)))
     mesh.AddLine("z", list(np.linspace(-h, 0, nz + 1)) + [-h - air, air_up])
     for a in "xyz":
@@ -414,11 +430,15 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
         if new:
             mesh.AddLine(a, new)
     # final cleanup of tiny cells, NEVER dropping copper/port edges (dropping one disconnects the port)
-    keep = {"x": np.array(sorted(set(merge(list(exs) + lx + [bx0, bx1], tol)))),
-            "y": np.array(sorted(set(merge(list(eys) + ly + [by0, by1], tol)))),
+    keep = {"x": np.array(sorted(set(merge(list(exs) + [bx0, bx1], tol, lx)))),
+            "y": np.array(sorted(set(merge(list(eys) + [by0, by1], tol, ly)))),
             "z": np.array([-h, 0.0])}
+    gaps = [abs(s1[i] - s0[i]) for s0, s1, d in port_spans for i in (("xyz".index(d),))
+            if abs(s1[i] - s0[i]) > 1e-9]
     for a in "xyz":
         tol_f = 0.2 * min(res, h / 3)
+        if gaps:
+            tol_f = min(tol_f, 0.4 * min(gaps))           # never glue lines across a port gap
         out = []
         for v in np.sort(np.asarray(mesh.GetLines(a), float)):
             is_k = np.min(np.abs(keep[a] - v)) < 1e-9
@@ -432,6 +452,12 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
             out.append((v, is_k))
         mesh.ClearLines(a); mesh.AddLine(a, [v for v, _ in out])
 
+    for (s0, s1, d), (pname, _) in zip(port_spans, ports):  # sanity check before running FDTD
+        ln = np.asarray(mesh.GetLines(d)); i = "xyz".index(d)
+        n_in = np.sum((ln >= min(s0[i], s1[i]) - 1e-9) & (ln <= max(s0[i], s1[i]) + 1e-9))
+        if n_in < 2:
+            raise RuntimeError(f"port {pname}: its span along {d} ({abs(s1[i]-s0[i]):.3f} mm) has no "
+                               f"mesh cell (zero-length port). Set OE_RES_MM smaller and report the case.")
     dmin = {a: np.diff(np.asarray(mesh.GetLines(a))).min() for a in "xyz"}
     log("openEMS: smallest cell " + ", ".join(f"{a}={v*1e3:.1f} um" for a, v in dmin.items()))
     nx, ny, nzz = (len(mesh.GetLines(a)) for a in "xyz")
@@ -544,7 +570,7 @@ if PATTERN_SOURCE == "openems" or (PATTERN_SOURCE == "auto" and OE_ENABLE and no
         import hashlib
         key = hashlib.md5(open(base + ".pcb", "rb").read() + repr((
             OE_GROUND, OE_EXTRA_TOP, OE_BOARD_MARGIN_MM, OE_RES_MM, OE_END_DB, OE_MAX_TS, OE_AIR_LAM,
-            OE_NEAR_DZ_MM, OE_N_FDUMP, PATCH_REGEX, OE_AIR_UP_LAM, "backend-v3")).encode()).hexdigest()[:10]
+            OE_NEAR_DZ_MM, OE_N_FDUMP, PATCH_REGEX, OE_AIR_UP_LAM, "backend-v4")).encode()).hexdigest()[:10]
         sim_path = os.path.join(out_dir, "openems_" + key)
         done = os.path.join(sim_path, "done.txt")
         need_run = OE_FORCE_RERUN or not os.path.exists(done)
