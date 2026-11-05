@@ -110,7 +110,7 @@ The repository ships with an example (`examples/Radar24G_Array1x4_Layout`) and i
 | `OE_GROUND` | `"auto"` | Bottom-side ground: `"full"`, `"none"`, `"largest"` (under the largest copper rectangle) or a list of rectangles in meters. `auto` = `full` if patches are found, otherwise `none` |
 | `OE_EXTRA_TOP` | `[]` | Extra top copper (e.g. the rest of the board ground) as rectangles in meters |
 | `OE_RES_MM` | `None` | Fine mesh cell; `None` = half of the narrow traces, forced to at least 2 cells across every port |
-| `OE_END_DB`, `OE_MAX_TS` | `-40`, `400000` | FDTD energy end criterion and timestep limit |
+| `OE_END_DB`, `OE_MAX_TS` | `-30`, `400000` | FDTD energy end criterion and timestep limit |
 | `OE_AIR_LAM`, `OE_AIR_UP_LAM` | `0.25`, `1.0` | Air around the board and above it, in λ at the lowest frequency. Increase `OE_AIR_UP_LAM` to see more wave cycles in `nearfield_side.gif` (slower) |
 | `OE_NEAR_DZ_MM` | `0.5` | Height of the \|E\| plane above the copper |
 | `OE_N_FDUMP` | `21` | Number of frequencies stored in the field dumps |
