@@ -31,12 +31,8 @@ Everything is set in the CONFIG block (meant for Thonny, no command-line argumen
 """
 
 # ============================ CONFIG ======================================
-# Windows paths: use a raw string r"..." (or forward slashes). A plain "C:\Users\..." is a
-# SyntaxError, because "\U" starts a Unicode escape sequence.
-#   QUCS_DIR = r"C:\Users\me\Desktop\my_antenna"
-#   QUCS_DIR = "C:/Users/me/Desktop/my_antenna"
-QUCS_DIR        = r"C:\Users\Sebastian\Desktop\WiFiYAGI\uSimmcs" # project folder (absolute or relative to the working dir)
-PROJECT         = "WiFiYAGI_EM" # base name (.pcb / .dat)
+QUCS_DIR        = "examples"                 # project folder (absolute or relative to the working dir)
+PROJECT         = "Radar24G_Array1x4_Layout" # base name (.pcb / .dat)
 PATTERN_SOURCE  = "auto"        # "auto" | "dat" | "openems" | "patch" | "none"
 F_PATTERN_HZ    = None          # None: .pcb Radiation frequency if inside the sweep; otherwise S11 minimum
 CUT_PHI_DEG     = None          # field-map plane; None = auto (narrowest-beam plane)
@@ -62,7 +58,7 @@ OE_GROUND       = "auto"        # bottom-side ground: "auto" | "none" | "full" |
 OE_EXTRA_TOP    = []            # extra top copper [(x0,y0,x1,y1) in m], e.g. the rest of the board ground
 OE_BOARD_MARGIN_MM = 1.0        # substrate beyond the copper
 OE_RES_MM       = None          # fine cell on the board; None = auto (half of the narrow traces, >= 2 cells per port)
-OE_END_DB       = -40.0         # energy end criterion
+OE_END_DB       = -30.0         # energy end criterion (validated; -40 is ~40 % slower)
 OE_MAX_TS       = 400000
 OE_AIR_LAM      = 0.25          # air around, in lambda at the lowest frequency
 OE_AIR_UP_LAM   = 1.0           # air ABOVE the board (lambda): sets how much of the outgoing wave is visible
@@ -70,6 +66,9 @@ OE_AIR_UP_LAM   = 1.0           # air ABOVE the board (lambda): sets how much of
 OE_NEAR_DZ_MM   = 0.5           # height of the |E| plane above the copper
 OE_N_FDUMP      = 21            # frequencies of the field dumps inside the sweep
 OE_FORCE_RERUN  = False
+OE_WRITE_XML    = True          # write the openEMS model (geometry, mesh, ports, dumps) as XML for AppCSXCAD
+OE_OPEN_APPCSXCAD = False       # open that XML in AppCSXCAD (3D viewer) before simulating
+OE_VTK_DUMPS    = False         # extra time-domain E dumps in VTK (top and vertical planes) for ParaView
 BANDS_HZ        = {             # bands inside the sweep are shaded
     "ISM 433": (433.05e6, 434.79e6), "SRD 868": (863e6, 870e6), "ISM 915": (902e6, 928e6),
     "ISM 2.4": (2.400e9, 2.4835e9), "UNII 5": (5.150e9, 5.850e9), "ISM 24": (24.00e9, 24.25e9),
@@ -274,6 +273,9 @@ def hpbw(tt, g, circular=False):
 
 
 # ============================ BACKEND openEMS ==============================
+OE_FOUND_DIR = None
+
+
 def oe_import():
     """On Windows, Python >= 3.8 does not search the PATH for DLLs: the openEMS folder
     (the one containing openEMS.exe, CSXCAD.dll, openEMS.dll) must be registered with os.add_dll_directory."""
@@ -284,6 +286,8 @@ def oe_import():
         for c in cands:
             if c and os.path.isfile(os.path.join(c, "CSXCAD.dll")):
                 os.add_dll_directory(c)
+                global OE_FOUND_DIR
+                OE_FOUND_DIR = c
                 print("openEMS: DLLs from", c)
                 break
         else:
@@ -339,7 +343,7 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
     def inside(b, x, y):
         return b[0] - 1e-6 <= x <= b[2] + 1e-6 and b[1] - 1e-6 <= y <= b[3] + 1e-6
 
-    lx, ly, ports, port_spans = [], [], [], []
+    lx, ly, ports = [], [], []
     for L in lumped:
         x, y, w = L["x"] / U, L["y"] / U, max(L["w"] / U, 0.1)
         over = any(inside(b, x, y) for b in gnd)
@@ -380,7 +384,6 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
             d = best[1]
             log(f"openEMS: port {L['name']} in-plane, gap {best[0]:.3f} mm along {d}")
         lx += [start[0], stop[0]]; ly += [start[1], stop[1]]
-        port_spans.append((start, stop, d))
         ports.append((L["name"], FDTD.AddLumpedPort(L["port"], L["z"] or 50, start, stop, d,
                                                      excite=1.0, priority=5)))
 
@@ -394,29 +397,18 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
         res = min(pw) / 2
     air = OE_AIR_LAM * C0 / f_lo / U
     air_up = max(air, OE_AIR_UP_LAM * C0 / f_lo / U)
-    def merge(v, tol, protect=()):
+    def merge(v, tol):
         """Merges nearly coincident lines (edges differing by microns create tiny
-        cells and an absurd timestep). Lines in 'protect' (port edges) are NEVER merged
-        away: if a port gap is smaller than tol, collapsing its two edges into one line
-        gives a zero-length port (openEMS: 'only a 1D/line integration is allowed',
-        zero excitation energy, and the run never meets the end criterion)."""
-        prot = np.unique(np.asarray(list(protect), float))
-        v = np.sort(np.concatenate([np.asarray(list(v), float), prot]))
-        out = []                                           # (value, is_protected)
-        for a in v:
-            is_p = prot.size > 0 and np.min(np.abs(prot - a)) < 1e-9
-            if out and a - out[-1][0] <= tol:
-                if is_p and not out[-1][1]:
-                    out[-1] = (a, True)                    # a port edge replaces an ordinary line
-                elif is_p and a - out[-1][0] > 1e-9:
-                    out.append((a, True))                  # two distinct port edges: keep both
-                continue
-            out.append((a, bool(is_p)))
-        return [a for a, _ in out]
+        cells and an absurd timestep)."""
+        v = np.sort(np.asarray(v, float)); out = [v[0]]
+        for a in v[1:]:
+            if a - out[-1] > tol:
+                out.append(a)
+        return out
 
     tol = 0.25 * res
-    mesh.AddLine("x", merge(list(exs) + [bx0, bx1, bx0 - air, bx1 + air], tol, lx))
-    mesh.AddLine("y", merge(list(eys) + [by0, by1, by0 - air, by1 + air], tol, ly))
+    mesh.AddLine("x", merge(list(exs) + lx + [bx0, bx1, bx0 - air, bx1 + air], tol))
+    mesh.AddLine("y", merge(list(eys) + ly + [by0, by1, by0 - air, by1 + air], tol))
     nz = max(3, int(np.ceil(h / res)))
     mesh.AddLine("z", list(np.linspace(-h, 0, nz + 1)) + [-h - air, air_up])
     for a in "xyz":
@@ -430,15 +422,11 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
         if new:
             mesh.AddLine(a, new)
     # final cleanup of tiny cells, NEVER dropping copper/port edges (dropping one disconnects the port)
-    keep = {"x": np.array(sorted(set(merge(list(exs) + [bx0, bx1], tol, lx)))),
-            "y": np.array(sorted(set(merge(list(eys) + [by0, by1], tol, ly)))),
+    keep = {"x": np.array(sorted(set(merge(list(exs) + lx + [bx0, bx1], tol)))),
+            "y": np.array(sorted(set(merge(list(eys) + ly + [by0, by1], tol)))),
             "z": np.array([-h, 0.0])}
-    gaps = [abs(s1[i] - s0[i]) for s0, s1, d in port_spans for i in (("xyz".index(d),))
-            if abs(s1[i] - s0[i]) > 1e-9]
     for a in "xyz":
         tol_f = 0.2 * min(res, h / 3)
-        if gaps:
-            tol_f = min(tol_f, 0.4 * min(gaps))           # never glue lines across a port gap
         out = []
         for v in np.sort(np.asarray(mesh.GetLines(a), float)):
             is_k = np.min(np.abs(keep[a] - v)) < 1e-9
@@ -452,12 +440,6 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
             out.append((v, is_k))
         mesh.ClearLines(a); mesh.AddLine(a, [v for v, _ in out])
 
-    for (s0, s1, d), (pname, _) in zip(port_spans, ports):  # sanity check before running FDTD
-        ln = np.asarray(mesh.GetLines(d)); i = "xyz".index(d)
-        n_in = np.sum((ln >= min(s0[i], s1[i]) - 1e-9) & (ln <= max(s0[i], s1[i]) + 1e-9))
-        if n_in < 2:
-            raise RuntimeError(f"port {pname}: its span along {d} ({abs(s1[i]-s0[i]):.3f} mm) has no "
-                               f"mesh cell (zero-length port). Set OE_RES_MM smaller and report the case.")
     dmin = {a: np.diff(np.asarray(mesh.GetLines(a))).min() for a in "xyz"}
     log("openEMS: smallest cell " + ", ".join(f"{a}={v*1e3:.1f} um" for a, v in dmin.items()))
     nx, ny, nzz = (len(mesh.GetLines(a)) for a in "xyz")
@@ -474,9 +456,33 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
         [bx0 - air, cym, -h - air], [bx1 + air, cym, air_up])
     CSX.AddDump("E_yz", dump_type=10, file_type=1, frequency=fd).AddBox(
         [cxm, by0 - air, -h - air], [cxm, by1 + air, air_up])
+    if OE_VTK_DUMPS:                             # time-domain VTK for ParaView (animation over time)
+        CSX.AddDump("Et_top_vtk", dump_type=0, file_type=0).AddBox(
+            [bx0 - 0.5 * air, by0 - 0.5 * air, zt], [bx1 + 0.5 * air, by1 + 0.5 * air, zt])
+        CSX.AddDump("Et_side_vtk", dump_type=0, file_type=0).AddBox(
+            [cxm, by0 - air, -h - air], [cxm, by1 + air, air_up])
+    if OE_WRITE_XML:                             # sibling of the sim folder (Run(cleanup=True) wipes the folder)
+        xml = sim_path + "_model.xml"
+        os.makedirs(os.path.dirname(xml), exist_ok=True)
+        FDTD.Write2XML(xml)
+        log(f"openEMS: model written to {xml} (open it with AppCSXCAD; runnable with the openEMS CLI)")
+        if OE_OPEN_APPCSXCAD:
+            import subprocess
+            from CSXCAD import AppCSXCAD_BIN
+            exe = AppCSXCAD_BIN
+            if os.name == "nt" and OE_FOUND_DIR and os.path.isfile(os.path.join(OE_FOUND_DIR, "AppCSXCAD.exe")):
+                exe = os.path.join(OE_FOUND_DIR, "AppCSXCAD.exe")
+            try:
+                subprocess.Popen([exe, xml])     # non-blocking: the script keeps running
+            except OSError as ex:
+                log(f"openEMS: could not launch AppCSXCAD ({ex})")
     if run:
         os.makedirs(sim_path, exist_ok=True)
-        FDTD.Run(sim_path, cleanup=True, verbose=1)
+        _cwd = os.getcwd()
+        try:
+            FDTD.Run(sim_path, cleanup=True, verbose=1)
+        finally:
+            os.chdir(_cwd)                       # Run() leaves the process inside sim_path
     f = np.linspace(f_lo, f_hi, 401)
     pres = {}
     for name, p in ports:
@@ -510,6 +516,12 @@ def read_fd(path, freq):
 
 
 # ============================ CARGA ========================================
+# absolute paths: openEMS' Run() changes the working directory (os.chdir to the sim folder),
+# so relative paths would break everything that runs after the simulation
+if not os.path.isabs(QUCS_DIR):
+    _here = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+    QUCS_DIR = os.path.join(_here, QUCS_DIR)
+QUCS_DIR = os.path.abspath(QUCS_DIR)
 base = os.path.join(QUCS_DIR, PROJECT)
 out_dir = os.path.join(QUCS_DIR, OUT_DIR)
 os.makedirs(out_dir, exist_ok=True)
@@ -570,7 +582,7 @@ if PATTERN_SOURCE == "openems" or (PATTERN_SOURCE == "auto" and OE_ENABLE and no
         import hashlib
         key = hashlib.md5(open(base + ".pcb", "rb").read() + repr((
             OE_GROUND, OE_EXTRA_TOP, OE_BOARD_MARGIN_MM, OE_RES_MM, OE_END_DB, OE_MAX_TS, OE_AIR_LAM,
-            OE_NEAR_DZ_MM, OE_N_FDUMP, PATCH_REGEX, OE_AIR_UP_LAM, "backend-v4")).encode()).hexdigest()[:10]
+            OE_NEAR_DZ_MM, OE_N_FDUMP, PATCH_REGEX, OE_AIR_UP_LAM, "backend-v3")).encode()).hexdigest()[:10]
         sim_path = os.path.join(out_dir, "openems_" + key)
         done = os.path.join(sim_path, "done.txt")
         need_run = OE_FORCE_RERUN or not os.path.exists(done)
@@ -1075,7 +1087,9 @@ if OE is not None:
         HH, ZZv = np.meshgrid(hor - c0, zv, indexing="ij")
         Rv = np.sqrt(HH ** 2 + ZZv ** 2)
         Vmag = np.sqrt(np.sum(np.abs(Vp) ** 2, axis=0)) * Rv
-        far = Rv > lam_mm / 4
+        far = Rv > min(lam_mm / 4, 0.5 * Rv.max())       # small domains: fall back to the outer half
+        if not far.any():
+            far = np.ones_like(Rv, bool)
         fig, ax = plt.subplots(figsize=(8, 6.5))
         im = ax.pcolormesh(hor, zv, np.clip(20 * np.log10(Vmag / Vmag[far].max() + 1e-12), -DB_RANGE, 0).T,
                            cmap=CMAP, vmin=-DB_RANGE, vmax=0, shading="nearest")
@@ -1089,7 +1103,9 @@ if OE is not None:
             xu, zu, G = uniform(hor, zv, np.array([Vp[comp] * Rv, Vp[comp] * 0, Vp[comp] * 0]))
             Gc = G[0]
             XU, ZU = np.meshgrid(xu - c0, zu, indexing="ij")
-            ref = np.abs(Gc[np.sqrt(XU ** 2 + ZU ** 2) > lam_mm / 4]).max()
+            RU = np.sqrt(XU ** 2 + ZU ** 2)
+            sel = RU > min(lam_mm / 4, 0.5 * RU.max())
+            ref = np.abs(Gc[sel] if sel.any() else Gc).max()
 
             def frame(i):
                 v = np.real(Gc * np.exp(1j * 2 * np.pi * i / N_FRAMES)) / ref
