@@ -106,7 +106,8 @@ The repository ships with an example (`examples/Radar24G_Array1x4_Layout`) and i
 | `MAKE_GIFS`, `MAKE_ROT_GIF`, `N_FRAMES` | `True`, `False`, `24` | Animations |
 | `SHOW`, `SHOW_WAVE_LIVE` | `True`, `True` | Interactive windows (set `SHOW = False` for batch runs) |
 | `PATCH_REGEX`, `POL_AXIS`, `ELEM_PHASE_DEG`, `ELEM_AMPL` | | Analytical patch model: how patches are recognized by name (`P1_L`, `P1_R`… → `P1`), polarization axis, excitation |
-| `OE_ENABLE` | `True` | Allow openEMS in `auto` mode |
+| `OE_ENABLE` | `True` | Allow openEMS in `auto` mode (used when the `.dat` has no far-field) |
+| `OE_NEARFIELD_ALWAYS` | `False` | Also run openEMS for the near-field figures (07–09) when the `.dat` already has a far-field; the pattern still comes from the `.dat` |
 | `OE_GROUND` | `"auto"` | Bottom-side ground: `"full"`, `"none"`, `"largest"` (under the largest copper rectangle) or a list of rectangles in meters. `auto` = `full` if patches are found, otherwise `none` |
 | `OE_EXTRA_TOP` | `[]` | Extra top copper (e.g. the rest of the board ground) as rectangles in meters |
 | `OE_RES_MM` | `None` | Fine mesh cell; `None` = half of the narrow traces, forced to at least 2 cells across every port |
