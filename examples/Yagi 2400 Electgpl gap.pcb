@@ -1,0 +1,27 @@
+<QucsStudio Layout 5.8>
+<Properties>
+DataSet=*.dat
+DataDisplay=*.dpl
+OpenDisplay=1
+Grid=0.01 mm
+Mesh=20
+Excite=2|0.0001|4000
+Frequency=1.8 GHz|3.0 GHz|50
+Boundary=40mm|40mm|2
+Substrate=Subst1|4.4|1.6 mm|0.02|0|35 µm|0|0|0|0/-10mm/10mm/0
+Radiation=1|2.44 GHz|81|41|4
+</Properties>
+<Items>
+Rectangle GND 0 0 -0.04178|-0.046125|0.083|0.0286
+Rectangle DRV_A 0 0 -0.02248|-0.001525|0.02238|0.00305
+Rectangle DRV_B 0 0 0.0001|-0.001525|0.02238|0.00305
+Rectangle DIR1 0 0 -0.017145|0.017015|0.03429|0.00305
+Rectangle DIR2 0 0 -0.017145|0.035555|0.03429|0.00305
+Rectangle DIR3 0 0 -0.017145|0.05405|0.03429|0.00305
+Rectangle FEED_B 0 0 0.0001|-0.0148|0.00062|0.013275
+Rectangle TAP1 0 0 -0.00059|-0.0157|0.002|0.0009
+Rectangle TAP2 0 0 -0.00134|-0.0166|0.0035|0.0009
+Rectangle TAP3 0 0 -0.00209|-0.017525|0.005|0.000925
+Lumped GND 0.0022 -0.03101 0 2 0 0 0.001 0
+Lumped P1 0 0 1 0 50 0 0.0002 0.00305
+</Items>
