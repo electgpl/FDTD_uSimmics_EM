@@ -32,7 +32,7 @@ Everything is set in the CONFIG block (meant for Thonny, no command-line argumen
 
 # ============================ CONFIG ======================================
 QUCS_DIR        = "examples"                 # project folder (absolute or relative to the working dir)
-PROJECT         = "Radar24G_Array1x4_Layout" # base name (.pcb / .dat)
+PROJECT         = "Yagi 2400 Electgpl gap" # base name (.pcb / .dat)
 PATTERN_SOURCE  = "auto"        # "auto" | "dat" | "openems" | "patch" | "none"
 F_PATTERN_HZ    = None          # None: .pcb Radiation frequency if inside the sweep; otherwise S11 minimum
 CUT_PHI_DEG     = None          # field-map plane; None = auto (narrowest-beam plane)
@@ -52,6 +52,8 @@ SHOW_WAVE_LIVE  = True
 CMAP            = "turbo"
 # --- backend openEMS (FDTD) ---
 OE_ENABLE       = True          # in "auto" mode, use openEMS if the .dat has no far-field
+OE_NEARFIELD_ALWAYS = True      # run openEMS for the near-field figures (07-09) even when the .dat
+                                #   already has a far-field (the pattern still comes from the .dat)
 OE_DLL_DIR      = None          # Windows: openEMS folder if Python cannot find the DLLs (e.g. r"C:\openEMS")
 OE_GROUND       = "auto"        # bottom-side ground: "auto" | "none" | "full" | "largest" | [(x0,y0,x1,y1) in m]
                                 #   auto: "full" if there are patches; otherwise "none" (drawn copper only)
@@ -362,6 +364,10 @@ def run_openems(rects, lumped, sub, f_lo, f_hi, sim_path, run, log=print):
                 start, stop = [x, y - w / 2, -h], [x, y + w / 2, 0]
             d = "z"
             log(f"openEMS: port {L['name']} vertical (trace -> bottom ground)")
+        elif L["wx"] > 0 and L["wy"] > 0:                 # port box fully defined (e.g. a dipole feed gap)
+            start, stop = [x - L["wx"] / U / 2, y - L["wy"] / U / 2, 0], [x + L["wx"] / U / 2, y + L["wy"] / U / 2, 0]
+            d = "x" if L["wx"] <= L["wy"] else "y"            # excitation across the short side (the gap)
+            log(f"openEMS: port {L['name']} in-plane box {L['wx']*1e3:.3f} x {L['wy']*1e3:.3f} mm, excited along {d}")
         else:                                             # in-plane port (gap to the nearest copper)
             best = None
             for r in allr:
@@ -575,7 +581,8 @@ print(f"Pattern frequency: {F0/1e9:.4f} GHz (lambda0 = {LAM*1e3:.2f} mm, antenna
 # ============================ openEMS (if applicable) ======================
 ffk_dat = [k for k, v in dat.items() if len(v["deps"]) == 2 and all(ff_axes(v["deps"]))]
 OE = None
-if PATTERN_SOURCE == "openems" or (PATTERN_SOURCE == "auto" and OE_ENABLE and not ffk_dat):
+if PATTERN_SOURCE == "openems" or (PATTERN_SOURCE == "auto" and OE_ENABLE and
+                                   (not ffk_dat or OE_NEARFIELD_ALWAYS)):
     if not (sub and sweep):
         print("openEMS: Substrate or Frequency missing in the .pcb")
     else:
@@ -702,6 +709,9 @@ for k in ("directivity_dBi", "directivity", "efficiency", "gain_dBi"):
     if k in dat and dat[k]["v"].size == 1:
         v = float(np.real(dat[k]["v"][0]))
         print(f"uSimmics: {k} = {v:.4g}" + (f"  ({100*v:.1f} %)" if k == "efficiency" and v <= 1 else ""))
+        if k == "efficiency" and v > 1 and not (v <= 100):
+            print("WARNING: uSimmics efficiency > 100 % is not physical (check the simulation: "
+                  "energy decay / end criterion, port de-embedding, or how uSimmics normalizes it)")
 if PATTERN_SOURCE in ("auto", "dat"):
     ffk = list(ffk_dat)
     if ffk:
