@@ -32,7 +32,7 @@ Everything is set in the CONFIG block (meant for Thonny, no command-line argumen
 
 # ============================ CONFIG ======================================
 QUCS_DIR        = "examples"                 # project folder (absolute or relative to the working dir)
-PROJECT         = "Yagi 2400 Electgpl gap" # base name (.pcb / .dat)
+PROJECT         = "Radar24G_Array1x4_Layout" # base name (.pcb / .dat)
 PATTERN_SOURCE  = "auto"        # "auto" | "dat" | "openems" | "patch" | "none"
 F_PATTERN_HZ    = None          # None: .pcb Radiation frequency if inside the sweep; otherwise S11 minimum
 CUT_PHI_DEG     = None          # field-map plane; None = auto (narrowest-beam plane)
@@ -52,7 +52,7 @@ SHOW_WAVE_LIVE  = True
 CMAP            = "turbo"
 # --- backend openEMS (FDTD) ---
 OE_ENABLE       = True          # in "auto" mode, use openEMS if the .dat has no far-field
-OE_NEARFIELD_ALWAYS = True      # run openEMS for the near-field figures (07-09) even when the .dat
+OE_NEARFIELD_ALWAYS = False     # run openEMS for the near-field figures (07-09) even when the .dat
                                 #   already has a far-field (the pattern still comes from the .dat)
 OE_DLL_DIR      = None          # Windows: openEMS folder if Python cannot find the DLLs (e.g. r"C:\openEMS")
 OE_GROUND       = "auto"        # bottom-side ground: "auto" | "none" | "full" | "largest" | [(x0,y0,x1,y1) in m]

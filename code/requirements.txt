@@ -1,0 +1,9 @@
+numpy>=1.24
+matplotlib>=3.7
+pillow>=9.0        # GIF export
+h5py>=3.8          # openEMS field dumps
+shapely>=2.0       # KiCad front-end (polygon union, thermal relief removal, hole splitting)
+scipy>=1.10        # 2D quasi-static solver + MTL (qs2d_mtl.py)
+imageio-ffmpeg     # optional: bundled ffmpeg for the MP4 animations (or ffmpeg in PATH)
+# openEMS + CSXCAD Python bindings are optional and are NOT on PyPI:
+# install them from the official openEMS release for your OS (see README).
