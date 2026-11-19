@@ -1,0 +1,33 @@
+# Sidecar for DirectionalCoupler.kicad_pcb  (coordinates in KiCad mm, y pointing down)
+name = "DirectionalCoupler"
+
+[stackup]                  # the .kicad_pcb has no Physical Stackup -> these values are used
+er = 4.4
+tand = 0.02
+h = 1.6
+
+[sweep]
+f_start = 0.3e9
+f_stop = 3.0e9
+n_points = 541
+band = [902e6, 928e6]
+
+[ports]                    # auto-detected from the SMA footprints (J1..J4), lumped 50 ohm
+auto = true
+kind = "lumped"            # "lumped" (validated) | "msl" (experimental, not validated yet)
+order = ["J1", "J2", "J3", "J4"]
+
+[roles]
+input = "J1"
+through = "J2"
+coupled = "J3"
+isolated = "J4"
+
+# Case A (reference FDTD): PEC box on the board outline, 4.8 mm air, FR4 lid with outer copper.
+[enclosure]
+kind = "pec_box"
+air = 4.8
+lid_h = 1.6
+lid_er = 4.4
+lid_tand = 0.02
+lid_metal = true
